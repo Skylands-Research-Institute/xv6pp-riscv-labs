@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+
+from gradelib import *
+
+r = Runner(save("xv6.out"))
+
+@test(0, "running symlinktest")
+def test_symlinktest():
+    r.run_qemu(shell_script([
+        "symlinktest"
+    ]), timeout=20)
+
+@test(50, "symlinktest passes", parent=test_symlinktest)
+def test_symlinktest_ok():
+    r.match(r"^symlink test: ok$")
+
+@test(50, "usertests -q")
+def test_usertests():
+    r.run_qemu(shell_script([
+        "usertests -q"
+    ]), timeout=300)
+    r.match(r"^ALL TESTS PASSED$")
+
+run_tests()
