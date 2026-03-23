@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+
+import re
+from gradelib import *
+
+r = Runner(save("xv6.out"))
+
+@test(10, "vmprint system call exists")
+def test_vmprint_syscall_exists():
+    r.run_qemu(shell_script([
+        'vmprinttest',
+        'echo FAIL'
+    ]), stop_breakpoint('_Z11sys_vmprintv'))
+    r.match(r'\$ vmprinttest', no=['FAIL'])
+
+@test(5, "vmprinttest runs")
+def test_vmprinttest_runs():
+    r.run_qemu(shell_script([
+        'vmprinttest'
+    ]))
+    r.match(r'^VA\s+PA$', no=["exec .* failed", "sbrk failed"])
+
+@test(10, "vmprint prints expected low virtual addresses")
+def test_vmprint_low_addrs():
+    r.run_qemu(shell_script([
+        'vmprinttest'
+    ]))
+    r.match(
+        r'^0x0000000000000000\s+0x[0-9a-fA-F]+$',
+        r'^0x0000000000001000\s+0x[0-9a-fA-F]+$',
+        r'^0x0000000000002000\s+0x[0-9a-fA-F]+$',
+        r'^0x0000000000003000\s+0x[0-9a-fA-F]+$',
+    )
+
+@test(10, "vmprint prints grown heap pages")
+def test_vmprint_heap_growth():
+    r.run_qemu(shell_script([
+        'vmprinttest'
+    ]))
+    r.match(
+        r'^0x0000000000010000\s+0x[0-9a-fA-F]+$',
+        r'^0x0000000000011000\s+0x[0-9a-fA-F]+$',
+        r'^0x0000000000012000\s+0x[0-9a-fA-F]+$',
+        r'^0x0000000000013000\s+0x[0-9a-fA-F]+$',
+    )
+
+@test(5, "vmprint prints many mappings")
+def test_vmprint_many_lines():
+    r.run_qemu(shell_script([
+        'vmprinttest'
+    ]))
+    out = r.qemu.output
+    lines = re.findall(r'^0x[0-9a-fA-F]+\s+0x[0-9a-fA-F]+$', out, re.M)
+    if len(lines) < 16:
+        raise AssertionError(f"expected at least 16 VA/PA lines, found {len(lines)}")
+
+@test(10, "vmprinttest returns control to shell")
+def test_vmprint_returns():
+    r.run_qemu(shell_script([
+        'vmprinttest',
+        'echo OK'
+    ]))
+    r.match(r'^OK$', no=["exec .* failed"])
+
+run_tests()

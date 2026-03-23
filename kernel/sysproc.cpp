@@ -57,3 +57,7 @@ uint64 sys_uptime(void) {
   return kernel.interrupts.get_ticks();
 }
 
+uint64 sys_vmprint(void) {
+  kernel.memory.vmprint();
+  return 0;
+}

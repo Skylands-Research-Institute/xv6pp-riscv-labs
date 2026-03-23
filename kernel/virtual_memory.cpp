@@ -368,3 +368,6 @@ int virtual_memory::either_copyin(void *dst, int user_src, uint64 src, uint64 le
   }
 }
 
+void virtual_memory::vmprint() {
+  printf("VA\t\t\tPA\n");
+}

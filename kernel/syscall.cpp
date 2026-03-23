@@ -21,7 +21,8 @@ enum syscall_number {
   SYS_unlink,
   SYS_link,
   SYS_mkdir,
-  SYS_close
+  SYS_close,
+  SYS_vmprint
 };
 
 // Fetch the uint64 at addr from the current process.
@@ -106,6 +107,7 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_link(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_close(void);
+extern uint64 sys_vmprint(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -132,6 +134,7 @@ static uint64 (*syscalls[])(void) = {
   sys_link,
   sys_mkdir,
   sys_close,
+  sys_vmprint,
 };
 
 void syscall(void) {
@@ -146,4 +149,3 @@ void syscall(void) {
     p->get_trapframe()->a0 = -1;
   }
 }
-
