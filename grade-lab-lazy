@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+
+import re
+from gradelib import *
+
+r = Runner(save("xv6.out"))
+
+@test(10, "lazytest")
+def test_lazytest():
+    r.run_qemu(shell_script([
+        'lazytest',
+        'echo OK'
+    ]))
+    r.match(
+        r'^lazybigtest: success$',
+        r'^1 2 3 4$',
+        r'^OK$',
+        no=["exec .* failed", "sbrk failed"]
+    )
+
+@test(20, "usertests -q")
+def test_usertests_q():
+    r.run_qemu(shell_script([
+        'usertests -q'
+    ]), timeout=250)
+    r.match(
+        r'^ALL TESTS PASSED$',
+        no=[
+            r'^FAILED$',
+            r'^SOME TESTS FAILED$',
+            r'panic:',
+            r'unexpected scause'
+        ]
+    )
+
+run_tests()
