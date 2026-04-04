@@ -32,7 +32,8 @@ void* page_allocator::alloc() {
 void page_allocator::free(void *p) {
   if ((uint64) p % PGSIZE != 0)
     panic("free: unaligned page");
+  if ((char*) p < end || (uint64) p >= PHYSTOP)
+    panic("free: out of range");
   lock_guard<spin_lock> g(lock);
   free_list.push((page*) p);
 }
-

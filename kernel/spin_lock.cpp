@@ -53,9 +53,5 @@ void spin_lock::release() {
 }
 
 bool spin_lock::holding() const {
-  //return ::holding(&lock);
-  if ((uint64) this < 0x80000000 || (uint64) this > 0x88000000)
-    panic("spin_lock: invalid this");
   return locked && cpuid == kernel.cpus.cpuid();
 }
-

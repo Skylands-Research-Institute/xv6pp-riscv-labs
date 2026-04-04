@@ -32,6 +32,12 @@ int file_manager::alloc_pipe(file **f0, file **f1) {
       if (!p->readopen && !p->writeopen)
         break;
     }
+    if (p == pipes + NFILE / 2) {
+      file_ref_guard f0_ref(*f0);
+      file_ref_guard f1_ref(*f1);
+      *f0 = *f1 = nullptr;
+      return -1;
+    }
     p->readopen = 1;
     p->writeopen = 1;
     p->nwrite = 0;

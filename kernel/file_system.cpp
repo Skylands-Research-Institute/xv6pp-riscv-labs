@@ -185,7 +185,7 @@ void file_system::iput(struct inode *ip) {
 }
 
 void file_system::iunlock(struct inode *ip) {
-  if (ip == 0 || !(ip->lock.holding() || ip->ref < 1))
+  if (ip == 0 || !ip->lock.holding() || ip->ref < 1)
     panic("iunlock");
   ip->lock.release();
 }
@@ -387,4 +387,3 @@ void file_system::itrunc(struct inode *ip) {
   ip->size = 0;
   iupdate(ip);
 }
-
