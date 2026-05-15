@@ -21,6 +21,7 @@ set -euo pipefail
 INSTRUCTOR_GH="jsissler"
 STARTER_REPO_URL="https://github.com/Skylands-Research-Institute/xv6pp-riscv-labs.git"
 DEFAULT_BRANCH="main"
+DEFAULT_LAB_BRANCH="lock"
 # =============================================================
 
 red()    { printf "\033[31m%s\033[0m\n" "$*" >&2; }
@@ -78,7 +79,8 @@ if [[ "$ORIGIN_URL" != "$EXPECTED_URL" ]]; then
 fi
 
 # --- Gather info -------------------------------------------------------------
-STUDENT_LOGIN_DEFAULT="student"
+STUDENT_LOGIN_DEFAULT="$(current_gh_login)"
+STUDENT_LOGIN_DEFAULT="${STUDENT_LOGIN_DEFAULT:-student}"
 
 PARENT_DIR="$(dirname "$REPO_ROOT")"
 STARTER_BASENAME="$(basename "$REPO_ROOT")"
@@ -102,6 +104,9 @@ TARGET_DIR="${PARENT_DIR}/${NEW_REPO_NAME}"
 
 read -rp "Instructor's GitHub username [${INSTRUCTOR_GH}]: " INSTRUCTOR_INPUT
 INSTRUCTOR_GH="${INSTRUCTOR_INPUT:-$INSTRUCTOR_GH}"
+
+read -rp "Lab branch you plan to work on [${DEFAULT_LAB_BRANCH}]: " LAB_BRANCH
+LAB_BRANCH="${LAB_BRANCH:-$DEFAULT_LAB_BRANCH}"
 
 # --- Ensure gh is authenticated as the student ------------------------------
 CURRENT_GH_LOGIN="$(current_gh_login)"
@@ -138,8 +143,17 @@ fi
 
 # --- Create the repo ---------------------------------------------------------
 green "Creating private repository ${TARGET_FULL} ..."
+REPO_ALREADY_EXISTS=0
 if gh repo view "$TARGET_FULL" >/dev/null 2>&1; then
-  yellow "Repo ${TARGET_FULL} already exists. Will reuse it."
+  REPO_ALREADY_EXISTS=1
+  yellow "Repo ${TARGET_FULL} already exists."
+  yellow "Reusing it will push starter branches and tags with --prune."
+  yellow "Any branches in ${TARGET_FULL} that are not present in starter origin may be deleted."
+  read -rp "Type the repo name '${NEW_REPO_NAME}' to reuse it: " REUSE_CONFIRM
+  if [[ "$REUSE_CONFIRM" != "$NEW_REPO_NAME" ]]; then
+    red "Aborted."
+    exit 1
+  fi
 else
   gh repo create "$TARGET_FULL" --private --description "Private labs for ${STUDENT_LOGIN}" --confirm >/dev/null
   green "Created."
@@ -156,7 +170,11 @@ if git remote get-url "$STUDENT_REMOTE" >/dev/null 2>&1; then
 fi
 git remote add "$STUDENT_REMOTE" "$CLONE_URL"
 
-green "Pushing ALL branches and tags to the private repo..."
+if [[ "$REPO_ALREADY_EXISTS" -eq 1 ]]; then
+  green "Synchronizing ALL starter branches and tags to the existing private repo..."
+else
+  green "Pushing ALL branches and tags to the private repo..."
+fi
 git fetch origin --prune --tags
 git push --prune "$STUDENT_REMOTE" \
   'refs/remotes/origin/*:refs/heads/*' \
@@ -206,15 +224,15 @@ Success!
 - You can now start working on the correct lab branch, e.g.:
 
     cd "${TARGET_DIR}"
-    git checkout ${DEFAULT_BRANCH}
+    git checkout ${LAB_BRANCH}
 
 Don't forget to commit & push your work regularly:
 
     git add .
-    git commit -m "${DEFAULT_BRANCH} lab progress"
+    git commit -m "${LAB_BRANCH} lab progress"
     git push
 
-Preferrably, you should use the GitHub Desktop application to manage your repository.
+Preferably, you should use the GitHub Desktop application to manage your repository.
 
 =============================================================
 EOF
