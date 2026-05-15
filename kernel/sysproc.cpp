@@ -57,3 +57,25 @@ uint64 sys_uptime(void) {
   return kernel.interrupts.get_ticks();
 }
 
+uint64 sys_statistics(void) {
+  uint64 user_buf;
+  int sz;
+  char buf[512];
+
+  argaddr(0, &user_buf);
+  argint(1, &sz);
+  if (sz <= 0)
+    return -1;
+  if (sz > (int) sizeof(buf))
+    sz = sizeof(buf);
+
+  int n = kernel.allocator.statistics(buf, sz);
+  int copy_len = n + 1;
+  if (copy_len > sz)
+    copy_len = sz;
+
+  process *p = kernel.cpus.curproc();
+  if (kernel.memory.copyout(p->get_pagetable(), user_buf, buf, copy_len) < 0)
+    return -1;
+  return n;
+}

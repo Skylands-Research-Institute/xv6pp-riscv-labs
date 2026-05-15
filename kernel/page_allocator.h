@@ -19,4 +19,5 @@ public:
   void* alloc();
   void free(void *pa);
   uint64 get_free_count();
+  int statistics(char *buf, int sz);
 };

@@ -15,8 +15,9 @@ void spin_lock::acquire() {
   //   a5 = 1
   //   s1 = &lk->locked
   //   amoswap.w.aq a5, a5, (s1)
+  acquire_count++;
   while (__sync_lock_test_and_set(&locked, 1) != 0)
-    ;
+    test_and_set_count++;
 
   // Tell the C compiler and the processor to not move loads or stores
   // past this point, to ensure that the critical section's memory
