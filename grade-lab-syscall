@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+
+import re
+from gradelib import *
+
+r = Runner(save("xv6.out"))
+
+@test(10, "getppid system call exists")
+def test_getppid_syscall_exists():
+    r.run_qemu(shell_script([
+        'getppidtest',
+        'echo FAIL'
+    ]), stop_breakpoint('_Z11sys_getppidv'))
+    r.match(r'\$ getppidtest', no=['FAIL'])
+
+@test(10, "getppidtest runs")
+def test_getppidtest_runs():
+    r.run_qemu(shell_script([
+        'getppidtest'
+    ]))
+    r.match(r'^child: ppid=\d+$', r'^parent: pid=\d+$', no=["exec .* failed"])
+
+@test(10, "child ppid matches parent pid")
+def test_getppid_matches():
+    r.run_qemu(shell_script([
+        'getppidtest'
+    ]))
+    out = r.qemu.output
+
+    m_child = re.search(r'^child: ppid=(\d+)$', out, re.M)
+    m_parent = re.search(r'^parent: pid=(\d+)$', out, re.M)
+
+    if not m_child or not m_parent:
+        raise AssertionError("missing expected output lines")
+
+    child_ppid = m_child.group(1)
+    parent_pid = m_parent.group(1)
+
+    if child_ppid != parent_pid:
+        raise AssertionError(f"child ppid {child_ppid} != parent pid {parent_pid}")
+
+@test(10, "getppidtest returns control to shell")
+def test_getppid_returns():
+    r.run_qemu(shell_script([
+        'getppidtest',
+        'echo OK'
+    ]))
+    r.match(r'^child: ppid=\d+$', r'^parent: pid=\d+$', r'^OK$', no=["exec .* failed"])
+
+run_tests()
