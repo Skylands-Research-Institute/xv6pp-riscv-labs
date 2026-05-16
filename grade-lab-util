@@ -35,4 +35,12 @@ def test_pingpong():
     ]))
     r.match('^\\d+: received ping$', '^\\d+: received pong$', '^OK$')
 
+@test(10, "Counter")
+def test_counter():
+    r.run_qemu(shell_script([
+        'Counter',
+        'echo OK'
+    ]))
+    r.match('^3$', '^4$', '^8$', '^6$', '^OK$', no=["exec .* failed"])
+
 run_tests()
