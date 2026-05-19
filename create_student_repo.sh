@@ -21,7 +21,7 @@ set -euo pipefail
 INSTRUCTOR_GH="jsissler"
 STARTER_REPO_URL="https://github.com/Skylands-Research-Institute/xv6pp-riscv-labs.git"
 DEFAULT_BRANCH="main"
-DEFAULT_LAB_BRANCH="lock"
+DEFAULT_LAB_BRANCH="util"
 # =============================================================
 
 red()    { printf "\033[31m%s\033[0m\n" "$*" >&2; }
