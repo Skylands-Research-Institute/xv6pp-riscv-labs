@@ -11,15 +11,16 @@
 #
 # What it does:
 #   1) Creates a private repo under the student's GitHub account.
-#   2) Pushes ALL origin branches and tags from this starter repo to that new private repo.
+#   2) Pushes the starter branches and tags already present in this VM clone to that new private repo.
 #   3) Adds the instructor as a collaborator with push (write) permission.
-#   4) Clones the new private repo as a sibling directory named with "-private".
+#   4) Clones the new private repo as a sibling directory.
 
 set -euo pipefail
 
 # ========== EDIT THIS BEFORE YOU DISTRIBUTE ==================
 INSTRUCTOR_GH="jsissler"
 STARTER_REPO_URL="https://github.com/Skylands-Research-Institute/xv6pp-riscv-labs.git"
+DEFAULT_NEW_REPO_NAME="xv6pp-riscv-labs-private"
 DEFAULT_BRANCH="main"
 DEFAULT_LAB_BRANCH="util"
 # =============================================================
@@ -83,8 +84,6 @@ STUDENT_LOGIN_DEFAULT="$(current_gh_login)"
 STUDENT_LOGIN_DEFAULT="${STUDENT_LOGIN_DEFAULT:-student}"
 
 PARENT_DIR="$(dirname "$REPO_ROOT")"
-STARTER_BASENAME="$(basename "$REPO_ROOT")"
-DEFAULT_NEW_REPO_NAME="${STARTER_BASENAME}-private"
 TARGET_DIR="${PARENT_DIR}/${DEFAULT_NEW_REPO_NAME}"
 
 echo
@@ -131,6 +130,8 @@ if [[ "$CURRENT_GH_LOGIN" != "$STUDENT_LOGIN" ]]; then
   exit 1
 fi
 
+gh auth setup-git >/dev/null
+
 echo
 yellow "Starter source: ${EXPECTED_URL}"
 yellow "You are about to create: https://github.com/${TARGET_FULL} (private)"
@@ -155,13 +156,12 @@ if gh repo view "$TARGET_FULL" >/dev/null 2>&1; then
     exit 1
   fi
 else
-  gh repo create "$TARGET_FULL" --private --description "Private labs for ${STUDENT_LOGIN}" --confirm >/dev/null
+  gh repo create "$TARGET_FULL" --private --description "Private labs for ${STUDENT_LOGIN}" >/dev/null
   green "Created."
 fi
 
 # --- Push EVERYTHING to the new repo ----------------------------------------
-yellow "Fetching all branches and tags from all remotes..."
-git fetch --all --prune --tags
+yellow "Preparing starter branches and tags from this VM clone..."
 
 CLONE_URL="$(gh api "repos/${TARGET_FULL}" -q .clone_url)"
 STUDENT_REMOTE="student"
@@ -175,10 +175,29 @@ if [[ "$REPO_ALREADY_EXISTS" -eq 1 ]]; then
 else
   green "Pushing ALL branches and tags to the private repo..."
 fi
-git fetch origin --prune --tags
-git push --prune "$STUDENT_REMOTE" \
-  'refs/remotes/origin/*:refs/heads/*' \
-  'refs/tags/*:refs/tags/*'
+
+mapfile -t STARTER_REFS < <(git for-each-ref --format='%(refname)' refs/remotes/origin refs/tags | grep -v '^refs/remotes/origin/HEAD$')
+if [[ "${#STARTER_REFS[@]}" -eq 0 ]]; then
+  red "No starter branches or tags were found in this VM clone."
+  red "Please ask your instructor for a refreshed VM image."
+  git remote remove "$STUDENT_REMOTE"
+  exit 1
+fi
+
+PUSH_REFS=()
+for ref in "${STARTER_REFS[@]}"; do
+  case "$ref" in
+    refs/remotes/origin/*)
+      branch="${ref#refs/remotes/origin/}"
+      PUSH_REFS+=("${ref}:refs/heads/${branch}")
+      ;;
+    refs/tags/*)
+      PUSH_REFS+=("${ref}:${ref}")
+      ;;
+  esac
+done
+
+git push --prune "$STUDENT_REMOTE" "${PUSH_REFS[@]}"
 
 # --- Set default branch ------------------------------------------------------
 green "Setting default branch to ${DEFAULT_BRANCH}..."
@@ -201,6 +220,11 @@ if [[ -e "$TARGET_DIR" ]]; then
 else
   green "Cloning the new private repo to: ${TARGET_DIR}"
   gh repo clone "${TARGET_FULL}" "${TARGET_DIR}" >/dev/null
+fi
+
+if [[ -d "${TARGET_DIR}/.git" ]]; then
+  green "Checking out lab branch ${LAB_BRANCH} in ${TARGET_DIR}..."
+  git -C "$TARGET_DIR" checkout "$LAB_BRANCH" >/dev/null
 fi
 
 green "Done!"
