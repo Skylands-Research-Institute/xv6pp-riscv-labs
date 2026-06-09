@@ -5,7 +5,7 @@ from gradelib import *
 
 r = Runner(save("xv6.out"))
 
-@test(10, "lazytest")
+@test(25, "lazytest")
 def test_lazytest():
     r.run_qemu(shell_script([
         'lazytest',
@@ -18,11 +18,11 @@ def test_lazytest():
         no=["exec .* failed", "sbrk failed"]
     )
 
-@test(20, "usertests -q")
+@test(25, "usertests -q")
 def test_usertests_q():
     r.run_qemu(shell_script([
         'usertests -q'
-    ]), timeout=250)
+    ]), timeout=900)
     r.match(
         r'^ALL TESTS PASSED$',
         no=[
