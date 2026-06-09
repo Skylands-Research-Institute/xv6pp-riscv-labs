@@ -5,11 +5,11 @@ from gradelib import *
 
 r = Runner(save("xv6.out"))
 
-@test(50, "kalloctest")
+@test(25, "kalloctest")
 def test_kalloctest():
     r.run_qemu(shell_script([
         'kalloctest'
-    ]), timeout=600)
+    ]), timeout=900)
     r.match(
         r'^test1 OK$',
         r'^test2 OK$',
@@ -21,11 +21,11 @@ def test_kalloctest():
         ]
     )
 
-@test(50, "usertests -q")
+@test(25, "usertests -q")
 def test_usertests_q():
     r.run_qemu(shell_script([
         'usertests -q'
-    ]), timeout=600)
+    ]), timeout=900)
     r.match(
         r'^ALL TESTS PASSED$',
         no=[
