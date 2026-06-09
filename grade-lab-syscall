@@ -20,7 +20,7 @@ def test_getppidtest_runs():
     ]))
     r.match(r'^child: ppid=\d+$', r'^parent: pid=\d+$', no=["exec .* failed"])
 
-@test(10, "child ppid matches parent pid")
+@test(20, "child ppid matches parent pid")
 def test_getppid_matches():
     r.run_qemu(shell_script([
         'getppidtest'
