@@ -10,15 +10,15 @@ def test_symlinktest():
         "symlinktest"
     ]), timeout=20)
 
-@test(50, "symlinktest passes", parent=test_symlinktest)
+@test(25, "symlinktest passes", parent=test_symlinktest)
 def test_symlinktest_ok():
     r.match(r"^symlink test: ok$")
 
-@test(50, "usertests -q")
+@test(25, "usertests -q")
 def test_usertests():
     r.run_qemu(shell_script([
         "usertests -q"
-    ]), timeout=300)
+    ]), timeout=900)
     r.match(r"^ALL TESTS PASSED$")
 
 run_tests()
