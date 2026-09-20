@@ -449,3 +449,8 @@ uint64 sys_pipe(void) {
   wf_ref.release();
   return 0;
 }
+
+uint64 sys_seek(void) {
+  // TODO: Implement the seek system call.
+  return -1;
+}

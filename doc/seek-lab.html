@@ -1,0 +1,499 @@
+<h2>What You Will Do</h2>
+<p>This lab adds the <strong>seek()</strong> system call to xv6++.</p>
+<p>Each open file has a <strong>current offset</strong>: the byte position where the next read or write begins. Reading and writing normally advance this offset. Seeking lets a program change the offset without reading or writing any data.</p>
+<p>You will implement:</p>
+<pre><code>int seek(int fd, int offset, int whence);
+</code></pre>
+<p>Your implementation will support positioning relative to:</p>
+<ul>
+    <li>The beginning of the file: <code>SEEK_SET</code>.</li>
+    <li>The current file offset: <code>SEEK_CUR</code>.</li>
+    <li>The end of the file: <code>SEEK_END</code>.</li>
+</ul>
+<p>The starter includes the test program, seek constants, and system-call plumbing. The kernel implementation stops at <code>sys_seek()</code>, which initially returns <code>-1</code>. You will replace that stub and add the file-level implementation.</p>
+
+<div style="border-left: 6px solid #d9534f; background: #fff3f3; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Important: Checkout the Correct Lab Branch</h3>
+    <p>Your lab repository is:</p>
+    <pre><code>/home/student/GitHub/xv6pp-riscv-labs-private
+</code></pre>
+    <p>For this lab, you must work on the <strong>seek</strong> branch.</p>
+    <h4>Option 1: Command Line</h4>
+    <pre><code>cd /home/student/GitHub/xv6pp-riscv-labs-private
+git fetch
+git checkout seek
+git pull
+git branch --show-current
+</code></pre>
+    <p>Expected branch:</p>
+    <pre><code>seek
+</code></pre>
+    <h4>Option 2: GitHub Desktop</h4>
+    <ol>
+        <li>Open <strong>GitHub Desktop</strong>.</li>
+        <li>Select <code>xv6pp-riscv-labs-private</code>.</li>
+        <li>Click <strong>Fetch origin</strong>.</li>
+        <li>Use the <strong>Current Branch</strong> dropdown to select <strong>seek</strong>.</li>
+        <li>Click <strong>Pull origin</strong> if updates are available.</li>
+    </ol>
+    <p><strong>Verify the branch before editing any code.</strong></p>
+</div>
+
+<hr />
+<h1>Learning Goals</h1>
+<p>After completing this lab, you should be able to:</p>
+<ul>
+    <li>Explain the relationship between a file descriptor, an open-file object, and an inode.</li>
+    <li>Explain how reads and writes use and advance the current file offset.</li>
+    <li>Implement absolute and relative file positioning.</li>
+    <li>Read integer system-call arguments and validate a file descriptor.</li>
+    <li>Separate syscall argument handling from file-level behavior.</li>
+    <li>Use an inode lock to protect offset calculations and updates.</li>
+    <li>Avoid signed/unsigned arithmetic errors and integer overflow.</li>
+    <li>Preserve the existing offset when a seek fails.</li>
+    <li>Test boundary conditions and check for regressions.</li>
+</ul>
+
+<hr />
+<h1>Common Lab Instructions</h1>
+<p>Develop your solution in:</p>
+<pre><code>/home/student/GitHub/xv6pp-riscv-labs-private
+</code></pre>
+<p>COMS221 students are encouraged to use the installed <strong>Eclipse IDE</strong> for development and debugging and <strong>GitHub Desktop</strong> for source control.</p>
+<p>Before submitting, run:</p>
+<pre><code>make grade
+</code></pre>
+<p>You may also run the branch-specific grader:</p>
+<pre><code>./grade-lab-seek
+</code></pre>
+<p>Commit all modified code before creating the submission archive:</p>
+<pre><code>make zipball
+</code></pre>
+<p>Upload <strong>lab.zip</strong> to Canvas. Your submitted code must also be committed and pushed to your private GitHub repository.</p>
+<p>This lab is worth <strong>50 points</strong>.</p>
+
+<hr />
+<h1>Background: File Offsets</h1>
+<h2>Where Does the Next Read Begin?</h2>
+<p>Suppose a file contains these 16 bytes:</p>
+<pre><code>Offset:  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15
+Data:    A  B  C  D  E  F  G  H  I  J  K  L  M  N  O  P
+</code></pre>
+<p>Opening the file creates an open-file object with an initial offset of <code>0</code>.</p>
+<p>Reading one byte returns <code>A</code> and advances the offset to <code>1</code>. Reading another byte returns <code>B</code> and advances the offset to <code>2</code>.</p>
+<p>A successful seek changes where the next operation begins:</p>
+<pre><code>seek(fd, 4, SEEK_SET);
+read(fd, &amp;c, 1);
+</code></pre>
+<p>The read returns <code>E</code>, and the offset becomes <code>5</code>.</p>
+
+<h2>File Descriptor, File Object, and Inode</h2>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Object</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Role</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">File descriptor</td><td style="padding: 8px; border: 1px solid #cccccc;">An integer identifying an entry in the process's open-file table.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>file</code> object</td><td style="padding: 8px; border: 1px solid #cccccc;">Tracks the open file, including its current offset, access modes, and underlying object.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Inode</td><td style="padding: 8px; border: 1px solid #cccccc;">Describes the filesystem object, including its size and data blocks.</td></tr>
+    </tbody>
+</table>
+<p>The current offset belongs to the <strong>open-file object</strong>. The file size belongs to the <strong>inode</strong>.</p>
+<p>Separate calls to <code>open()</code> normally create independent offsets. Descriptors created with <code>dup()</code>, and descriptors inherited through <code>fork()</code>, share the underlying open-file object and therefore share its offset.</p>
+
+<h2>Seeking and Writing</h2>
+<p>Seeking does not insert or remove bytes. A subsequent write begins at the selected position and overwrites existing bytes there.</p>
+<pre><code>Original file: ABCDEFGHIJKLMNOP
+
+seek(fd, 2, SEEK_SET);
+write(fd, "Z", 1);
+
+Updated file:  ABZDEFGHIJKLMNOP
+</code></pre>
+<p>Seeking alone must not modify file contents or file size.</p>
+
+<hr />
+<h1>Required System-Call Behavior</h1>
+<pre><code>int seek(int fd, int offset, int whence);
+</code></pre>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Argument</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Meaning</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>fd</code></td><td style="padding: 8px; border: 1px solid #cccccc;">An open file descriptor.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>offset</code></td><td style="padding: 8px; border: 1px solid #cccccc;">A signed byte displacement from the selected reference position.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>whence</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Selects the reference position using <code>SEEK_SET</code>, <code>SEEK_CUR</code>, or <code>SEEK_END</code>.</td></tr>
+    </tbody>
+</table>
+
+<h2>Position Calculations</h2>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Mode</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Value</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Requested New Position</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_SET</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>0</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>offset</code></td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_CUR</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>1</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Current file offset plus <code>offset</code>.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_END</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>2</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Current file size plus <code>offset</code>.</td></tr>
+    </tbody>
+</table>
+
+<h2>Success and Failure</h2>
+<ul>
+    <li>Return <code>0</code> on success.</li>
+    <li>Return <code>-1</code> on failure.</li>
+    <li>Accept positions from <code>0</code> through the current file size, inclusive.</li>
+    <li>Reject positions before the beginning or beyond the end of the file.</li>
+    <li>Reject invalid or closed file descriptors.</li>
+    <li>Reject unsupported <code>whence</code> values.</li>
+    <li>Reject pipes and devices; seek is supported for <code>FD_INODE</code> file objects.</li>
+    <li>Leave the current offset unchanged on every failure.</li>
+</ul>
+<div style="border-left: 6px solid #f0ad4e; background: #fff8e8; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">This Lab's Seek Contract</h3>
+    <p>This lab uses a simplified interface. A successful call returns <strong>0</strong>, not the resulting file offset. Seeking beyond EOF is an error.</p>
+    <p>Do not copy different return-value or beyond-EOF behavior from another operating system's <code>lseek()</code> implementation.</p>
+</div>
+
+<h2>Seeking Exactly to EOF</h2>
+<p>For a 16-byte file, position <code>16</code> is valid. It is immediately after the final byte.</p>
+<pre><code>seek(fd, 0, SEEK_END);
+</code></pre>
+<p>A subsequent read returns <code>0</code> because there are no more bytes to read. A subsequent write on a writable file can extend the file through the existing write implementation.</p>
+<p>For an empty file, the only valid position is <code>0</code>.</p>
+
+<hr />
+<h1>Starter Code</h1>
+<p>The starter provides:</p>
+<ul>
+    <li>The <code>SEEK_SET</code>, <code>SEEK_CUR</code>, and <code>SEEK_END</code> constants.</li>
+    <li>The syscall number and dispatch entry.</li>
+    <li>The user-level declaration and generated syscall-stub support.</li>
+    <li>The <code>seektest</code> program and its Makefile entry.</li>
+    <li>A kernel <code>sys_seek()</code> stub that returns <code>-1</code>.</li>
+</ul>
+<p>The starter is expected to compile, but <code>seektest</code> will fail until you implement seeking.</p>
+<div style="border-left: 6px solid #5bc0de; background: #eefaff; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Do Not Recreate Existing Plumbing</h3>
+    <p>You do not need another syscall number, dispatch entry, user declaration, syscall stub, or Makefile entry for <code>seektest</code>.</p>
+    <p>Your work begins at the kernel's <code>sys_seek()</code> stub and continues into the <code>file</code> class.</p>
+</div>
+
+<h2>Files Involved</h2>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">File</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Your Work</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/sysfile.cpp</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Replace the <code>sys_seek()</code> stub with argument handling, descriptor validation, and a call to the file-level operation.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/file.h</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Declare a public <code>int seek(int offset, int whence)</code> member function.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/file.cpp</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Implement file-type validation, locking, position calculations, bounds checks, and offset updates.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/fcntl.h</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Inspect the provided seek constants and include this header where needed.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>user/seektest.c</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Read and run the provided test.</td></tr>
+    </tbody>
+</table>
+
+<hr />
+<h1>Stage 1: Implement the System-Call Handler</h1>
+<p>Locate <code>sys_seek()</code> in <code>kernel/sysfile.cpp</code>.</p>
+<p>The handler should:</p>
+<ol>
+    <li>Read the signed integer <code>offset</code> argument.</li>
+    <li>Read the integer <code>whence</code> argument.</li>
+    <li>Validate <code>fd</code> and obtain its <code>file</code> object.</li>
+    <li>Call the file object's seek operation.</li>
+    <li>Return that operation's result.</li>
+</ol>
+<p>System-call arguments are numbered from zero:</p>
+<pre><code>Argument 0: fd
+Argument 1: offset
+Argument 2: whence
+</code></pre>
+<p>Inspect neighboring system calls for examples of <code>argint()</code> and <code>argfd()</code>. Use the existing descriptor helper instead of manually indexing the process's open-file table.</p>
+<p>The syscall handler should delegate offset calculations to the <code>file</code> class, which owns the offset and knows the underlying file type.</p>
+
+<hr />
+<h1>Stage 2: Add the File-Level Operation</h1>
+<h2>Declare the Member Function</h2>
+<p>Add a public member declaration to the <code>file</code> class:</p>
+<pre><code>int seek(int offset, int whence);
+</code></pre>
+<p>Implement the member function in <code>kernel/file.cpp</code>. Keep the existing file fields private.</p>
+
+<h2>Validate the File Type</h2>
+<p>Check the file object's type before using its inode pointer.</p>
+<p>Only <code>FD_INODE</code> objects support this operation. Return <code>-1</code> for pipes, devices, and other unsupported types.</p>
+<p>A pipe is a stream of bytes, and a device may have its own read/write behavior. Neither should be treated as an ordinary inode-backed file for seeking.</p>
+
+<h2>Protect the Operation with an Inode Lock</h2>
+<p>The existing <code>file::read()</code> and <code>file::write()</code> implementations use <code>inode_lock_guard</code> while accessing inode data and updating the offset.</p>
+<p>Follow that locking pattern. Hold the inode lock while:</p>
+<ul>
+    <li>Reading the current offset and file size.</li>
+    <li>Calculating the requested position.</li>
+    <li>Checking the position's bounds.</li>
+    <li>Updating the offset on success.</li>
+</ul>
+<p>The RAII guard releases the lock when it leaves scope, including when the function returns early.</p>
+<p>Seeking changes only the in-memory open-file offset. It does not require writing inode metadata or starting a filesystem log transaction.</p>
+
+<h2>Calculate, Validate, Then Update</h2>
+<p>Use this conceptual sequence:</p>
+<pre><code>reject unsupported file types
+lock the inode
+select the reference position from whence
+calculate the requested position using wide signed arithmetic
+reject positions outside [0, file size]
+store the validated position in the file offset
+return success
+</code></pre>
+<p>Reject an unknown <code>whence</code> without changing the offset.</p>
+<p><strong>Do not update the offset before validating the result.</strong> A failed seek must leave the open file in the same position.</p>
+
+<hr />
+<h1>Important: Signed and Unsigned Arithmetic</h1>
+<p>The displacement passed to <code>seek()</code> is a signed <code>int</code>. The existing file offset <code>off</code> and inode size <code>ip-&gt;size</code> are unsigned <code>uint</code> values.</p>
+<p>In this codebase, <code>int</code> and <code>uint</code> are 32-bit types. A <code>long long</code> is a signed 64-bit type, so it can represent any sum of one of these unsigned positions and a signed displacement.</p>
+<p>Mixing the original types without care can cause a negative result to wrap into a very large positive value.</p>
+
+<h2>Why the Obvious Check Fails</h2>
+<pre><code>// Incorrect: addition uses unsigned arithmetic.
+if (ip-&gt;size + offset &lt; 0)
+    return -1;
+</code></pre>
+<p>For a file size of <code>16</code> and displacement <code>-17</code>, the mathematical result is <code>-1</code>. In unsigned 32-bit arithmetic, the result wraps to <code>4294967295</code>. It is not less than zero, so the check fails to reject the request.</p>
+
+<div style="border-left: 6px solid #d9534f; background: #fff3f3; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Convert Before Adding</h3>
+    <p>A wider destination variable alone does not change how the expression on the right is evaluated. Convert an operand <strong>before</strong> performing the addition.</p>
+    <pre><code>// Incorrect: unsigned addition happens before assignment.
+long long tmp = ip-&gt;size + offset;
+
+// Incorrect: unsigned addition happens before the cast.
+long long tmp = (long long) (ip-&gt;size + offset);
+
+// Correct: convert the base first, then add in signed 64-bit arithmetic.
+long long tmp = (long long) ip-&gt;size + offset;
+</code></pre>
+    <p>Once the base is a <code>long long</code>, the signed <code>offset</code> is converted to <code>long long</code> for the addition as well. A second explicit cast on <code>offset</code> is not necessary.</p>
+</div>
+
+<h2>Worked Example: SEEK_END</h2>
+<p>Inside the file member function, after checking the file type and acquiring the inode lock, this pattern safely calculates and validates a position relative to EOF:</p>
+<pre><code>long long tmp;
+
+tmp = (long long) ip-&gt;size + offset;
+if (tmp &lt; 0 || tmp &gt; (long long) ip-&gt;size)
+    return -1;
+
+off = (uint) tmp;
+</code></pre>
+<p>The cast on <code>ip-&gt;size</code> in the comparison makes the signed comparison explicit. The final conversion to <code>uint</code> is safe because the bounds check has already established that <code>tmp</code> is nonnegative and no larger than the unsigned file size.</p>
+<p>Assigning <code>off = tmp;</code> after the same bounds check also works; the explicit cast documents the intentional conversion back to the offset's storage type.</p>
+<p>This example shows the arithmetic and validation pattern, not the complete method. You still need file-type validation, locking, mode selection, invalid-mode handling, and the correct success return.</p>
+
+<h2>Apply the Same Pattern to SEEK_CUR</h2>
+<p>For a position relative to the current offset, convert <code>off</code> before adding:</p>
+<pre><code>tmp = (long long) off + offset;
+</code></pre>
+<p>Use the same lower and upper bounds checks before changing <code>off</code>. For <code>SEEK_SET</code>, the requested position is simply the signed <code>offset</code>; assigning that value to <code>tmp</code> preserves its sign.</p>
+
+<h2>Check Your Arithmetic by Hand</h2>
+<p>For a 16-byte file:</p>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Request</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Signed Calculation</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Result</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_END, -2</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>16 + (-2) = 14</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Accept position 14.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_END, -16</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>16 + (-16) = 0</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Accept position 0.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_END, -17</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>16 + (-17) = -1</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Reject; preserve the old offset.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_END, 0</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>16 + 0 = 16</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Accept EOF.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_END, 1</code></td><td style="padding: 8px; border: 1px solid #cccccc;"><code>16 + 1 = 17</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Reject; preserve the old offset.</td></tr>
+    </tbody>
+</table>
+
+<h2>Avoid Negating the Most Negative Integer</h2>
+<p>Do not replace the wide calculation with a check based on <code>-offset</code> in the original <code>int</code> type. The most negative 32-bit signed integer is <code>-2147483648</code>, but its positive counterpart cannot be represented by a 32-bit signed integer. Negating that value causes signed overflow.</p>
+<p>Converting the base to <code>long long</code> and adding the signed displacement avoids this problem without special cases.</p>
+
+<hr />
+<h1>Provided Test</h1>
+<p>Read <code>user/seektest.c</code> before implementing the kernel changes.</p>
+<p>The test:</p>
+<ol>
+    <li>Creates or truncates <code>seektest.txt</code>.</li>
+    <li>Writes <code>ABCDEFGHIJKLMNOP</code>.</li>
+    <li>Seeks to position <code>4</code> using <code>SEEK_SET</code> and reads <code>E</code>.</li>
+    <li>Moves forward by <code>2</code> using <code>SEEK_CUR</code> and reads <code>H</code>.</li>
+    <li>Seeks to two bytes before EOF using <code>SEEK_END</code> and reads <code>O</code>.</li>
+    <li>Verifies that seeking on a pipe fails.</li>
+    <li>Rejects a negative absolute position, an absolute position beyond EOF, and an invalid <code>whence</code>.</li>
+    <li>Seeks to position <code>2</code> and writes <code>Z</code>.</li>
+    <li>Closes and reopens the file, then verifies the stored <code>Z</code>.</li>
+    <li>Rejects a position beyond EOF using <code>SEEK_END</code>.</li>
+    <li>Rejects <code>seek(fd, -17, SEEK_END)</code> on the 16-byte file.</li>
+</ol>
+
+<h2>Track the Offset Carefully</h2>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Operation</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Offset Afterward</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Read Result</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Write 16 bytes</td><td style="padding: 8px; border: 1px solid #cccccc;">16</td><td style="padding: 8px; border: 1px solid #cccccc;">—</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>seek(fd, 4, SEEK_SET)</code></td><td style="padding: 8px; border: 1px solid #cccccc;">4</td><td style="padding: 8px; border: 1px solid #cccccc;">—</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Read one byte</td><td style="padding: 8px; border: 1px solid #cccccc;">5</td><td style="padding: 8px; border: 1px solid #cccccc;"><code>E</code></td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>seek(fd, 2, SEEK_CUR)</code></td><td style="padding: 8px; border: 1px solid #cccccc;">7</td><td style="padding: 8px; border: 1px solid #cccccc;">—</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Read one byte</td><td style="padding: 8px; border: 1px solid #cccccc;">8</td><td style="padding: 8px; border: 1px solid #cccccc;"><code>H</code></td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>seek(fd, -2, SEEK_END)</code></td><td style="padding: 8px; border: 1px solid #cccccc;">14</td><td style="padding: 8px; border: 1px solid #cccccc;">—</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Read one byte</td><td style="padding: 8px; border: 1px solid #cccccc;">15</td><td style="padding: 8px; border: 1px solid #cccccc;"><code>O</code></td></tr>
+    </tbody>
+</table>
+<div style="border-left: 6px solid #5cb85c; background: #f0fff0; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Expected Success Output</h3>
+    <pre><code>seek test: ok
+</code></pre>
+    <p>The grader matches this exact line. The provided test prints it after all checks succeed.</p>
+    <p>Preserve the test's assertions and success message. Do not print the success message from the kernel or bypass failing checks.</p>
+</div>
+
+<hr />
+<h1>Boundary Cases to Verify</h1>
+<p>The provided test checks core behavior. Use additional tests to verify the full contract.</p>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Case</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Expected Behavior</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Seek to byte zero</td><td style="padding: 8px; border: 1px solid #cccccc;">Succeed.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Seek exactly to EOF</td><td style="padding: 8px; border: 1px solid #cccccc;">Succeed; a subsequent read returns zero bytes.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Seek before byte zero or beyond EOF</td><td style="padding: 8px; border: 1px solid #cccccc;">Return <code>-1</code> and preserve the previous offset.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Negative <code>SEEK_CUR</code> displacement within bounds</td><td style="padding: 8px; border: 1px solid #cccccc;">Move backward successfully.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Empty file</td><td style="padding: 8px; border: 1px solid #cccccc;">Only resulting position zero is valid.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Very large positive or negative displacement</td><td style="padding: 8px; border: 1px solid #cccccc;">Calculate safely and reject an out-of-range result without overflow.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Invalid <code>whence</code></td><td style="padding: 8px; border: 1px solid #cccccc;">Return <code>-1</code> and preserve the offset.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Invalid or closed descriptor</td><td style="padding: 8px; border: 1px solid #cccccc;">Return <code>-1</code>.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Pipe or device descriptor</td><td style="padding: 8px; border: 1px solid #cccccc;">Return <code>-1</code>.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;">Seek through a duplicated descriptor</td><td style="padding: 8px; border: 1px solid #cccccc;">Update the shared open-file offset.</td></tr>
+    </tbody>
+</table>
+<p>To test offset preservation, seek to a known position, attempt an invalid seek, then read a byte. The byte should come from the original position.</p>
+
+<hr />
+<h1>Testing and Debugging</h1>
+<h2>Build and Run xv6++</h2>
+<p>From the Ubuntu terminal:</p>
+<pre><code>cd /home/student/GitHub/xv6pp-riscv-labs-private
+make qemu
+</code></pre>
+<h2>Run the Provided Test</h2>
+<p>Inside the xv6++ shell:</p>
+<pre><code>seektest
+</code></pre>
+<p>Expected output:</p>
+<pre><code>seek test: ok
+</code></pre>
+<h2>Run the User Test Suite</h2>
+<p>Inside the xv6++ shell:</p>
+<pre><code>usertests -q
+</code></pre>
+<p>Expected final output:</p>
+<pre><code>ALL TESTS PASSED
+</code></pre>
+<h2>Run the Grader</h2>
+<p>Exit QEMU with <strong>Ctrl+A</strong>, then <strong>X</strong>. From the Ubuntu terminal, run:</p>
+<pre><code>make grade
+</code></pre>
+<p>Or:</p>
+<pre><code>./grade-lab-seek
+</code></pre>
+<p>The grader checks both the seek-test success line and the user-test success line.</p>
+
+<hr />
+<h1>Common Bugs and Debugging Advice</h1>
+<ul>
+    <li><strong>Leaving the syscall stub unchanged.</strong> The starter always returns <code>-1</code>; replace it with argument handling and delegation.</li>
+    <li><strong>Reading the wrong argument positions.</strong> The descriptor is argument zero, displacement is argument one, and mode is argument two.</li>
+    <li><strong>Forgetting the public member declaration.</strong> The handler must be able to call the new <code>file::seek()</code> operation.</li>
+    <li><strong>Using an inode pointer before checking the file type.</strong> Reject pipes and devices before entering inode-specific logic.</li>
+    <li><strong>Confusing file size with current offset.</strong> <code>SEEK_CUR</code> uses the open-file offset; <code>SEEK_END</code> uses the inode size.</li>
+    <li><strong>Forgetting that reads advance the offset.</strong> Account for completed reads before calculating a relative seek.</li>
+    <li><strong>Using unsigned arithmetic to detect negative positions.</strong> Convert to a wide signed type before adding.</li>
+    <li><strong>Casting the sum instead of an operand.</strong> <code>(long long) (off + offset)</code> widens the result only after the unsigned addition has happened.</li>
+    <li><strong>Negating the most negative integer.</strong> Avoid checks that depend on calculating <code>-offset</code> in the original signed type.</li>
+    <li><strong>Updating the offset before validation.</strong> Failed calls must preserve the previous position.</li>
+    <li><strong>Rejecting exact EOF.</strong> The upper bound is inclusive.</li>
+    <li><strong>Returning the new offset on success.</strong> This lab requires a return value of <code>0</code>.</li>
+    <li><strong>Changing file contents or size during seek.</strong> Only the open-file offset should change.</li>
+    <li><strong>Skipping the inode lock.</strong> Follow the synchronization pattern used by the existing read and write operations.</li>
+    <li><strong>Testing only the success path.</strong> Check rejected requests and confirm the original offset survives.</li>
+</ul>
+
+<hr />
+<h1>Grading Expectations</h1>
+<p>This lab is worth <strong>50 points</strong>.</p>
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Grader Check</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Points</th>
+        <th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Expected Result</th>
+    </tr></thead>
+    <tbody>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>seektest</code></td><td style="padding: 8px; border: 1px solid #cccccc;">25</td><td style="padding: 8px; border: 1px solid #cccccc;">All provided assertions pass and the test prints <code>seek test: ok</code>.</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #cccccc;"><code>usertests -q</code></td><td style="padding: 8px; border: 1px solid #cccccc;">25</td><td style="padding: 8px; border: 1px solid #cccccc;">The existing user test suite prints <code>ALL TESTS PASSED</code>.</td></tr>
+        <tr><th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Total</th><th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">50</th><th style="padding: 8px; text-align: left; border: 1px solid #cccccc;">Seek support with passing regression tests.</th></tr>
+    </tbody>
+</table>
+<p>Your implementation should satisfy the complete behavior described in this lab, including boundary conditions not exercised by the provided test.</p>
+
+<hr />
+<h1>Final Submission Checklist</h1>
+<ul>
+    <li>You worked in <code>xv6pp-riscv-labs-private</code> on the <code>seek</code> branch.</li>
+    <li>You read the provided <code>user/seektest.c</code>.</li>
+    <li>You replaced the <code>sys_seek()</code> stub.</li>
+    <li>You added the file-level seek declaration and implementation.</li>
+    <li>All three seek modes use the correct reference position.</li>
+    <li>Position calculations use safe signed arithmetic, with casts before addition.</li>
+    <li>Positions zero and EOF are accepted.</li>
+    <li>Out-of-range positions and invalid modes are rejected.</li>
+    <li>Failed seeks preserve the previous offset.</li>
+    <li>Invalid descriptors, pipes, and devices are rejected.</li>
+    <li>The inode lock protects the calculation and update.</li>
+    <li>Seeking does not change file contents or file size.</li>
+    <li><code>seektest</code> prints <code>seek test: ok</code>.</li>
+    <li><code>usertests -q</code> prints <code>ALL TESTS PASSED</code>.</li>
+    <li>The lab grader passes.</li>
+    <li>Your solution is committed and pushed to your private GitHub repository.</li>
+    <li>You created <code>lab.zip</code> and uploaded it to Canvas.</li>
+</ul>
+
+<h2>Suggested Final Commands</h2>
+<pre><code>cd /home/student/GitHub/xv6pp-riscv-labs-private
+git branch --show-current
+git status
+make grade
+git add kernel/sysfile.cpp kernel/file.h kernel/file.cpp
+git commit -m "Implement seek system call"
+git push
+make zipball
+</code></pre>
+<p>If you intentionally modified additional source files, review and commit those changes before running <code>make zipball</code>.</p>
+
+<div style="border-left: 6px solid #5cb85c; background: #f0fff0; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Final Reminder</h3>
+    <p>Calculate the requested position safely, validate it while holding the inode lock, and update the offset only after every check succeeds.</p>
+    <p>A successful seek changes where the next read or write begins. A failed seek changes nothing.</p>
+</div>

@@ -1,0 +1,20 @@
+[INFO ] console device: init, size=32
+[INFO ] console: init, size=192
+[INFO ] CPUs: init, size=1112
+[INFO ] process scheduler: init, size=24
+[INFO ] page allocator: init, size=64
+[INFO ] virtual memory: init, size=32
+[INFO ] process manager: init, size=23152
+[INFO ] interrupt manager: init, size=56
+[INFO ] interrupt manager: inithart, hart=0
+[INFO ] buffer cache: init, size=33432
+[INFO ] file manager: init, size=31672
+[INFO ] file system: init, size=6880
+[INFO ] disk driver: init, size=344
+[INFO ] disk: init, size=40
+[INFO ] interrupt manager: inithart, hart=1
+[INFO ] interrupt manager: inithart, hart=2
+init: starting sh
+$ usertests -q
+usertests starting
+qemu-system-riscv64: terminating on signal 2

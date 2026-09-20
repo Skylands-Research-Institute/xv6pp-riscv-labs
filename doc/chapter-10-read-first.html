@@ -1,0 +1,613 @@
+<div style="border-left: 6px solid #337ab7; background: #eef6ff; padding: 14px; margin: 16px 0;">
+    <h2 style="margin-top: 0;">Module Overview</h2>
+    <p>This module examines how xv6++ organizes persistent data into files and directories and maintains file-system consistency when multiple processes operate concurrently or the system crashes.</p>
+    <p>You will study the major file-system layers, including disk blocks, the buffer cache, write-ahead logging, inodes, directories, path-name lookup, file descriptors, and system-call integration.</p>
+    <p>This module has two required assessments:</p>
+    <ul>
+        <li><strong>Chapter 10 Quiz: File System</strong> — 15 points</li>
+        <li><strong>Seek Lab</strong> — 50 points</li>
+    </ul>
+    <p>The lab focuses on the open-file layer: you will implement a system call that changes where the next read or write begins.</p>
+</div>
+
+<hr />
+<h2>Why This Module Matters</h2>
+
+<p>A file system must do much more than store bytes. It must provide meaningful names, organize files into directories, share files safely among processes, manage limited disk space, and preserve consistency when operations are interrupted by a crash.</p>
+<p>Even a simple operation such as creating and writing a file may require several coordinated updates:</p>
+
+<ul>
+    <li>allocate an inode,</li>
+    <li>initialize inode metadata,</li>
+    <li>add a directory entry,</li>
+    <li>allocate data blocks,</li>
+    <li>update free-space information,</li>
+    <li>write the changes to disk safely.</li>
+</ul>
+
+<p>Chapter 10 shows how xv6++ divides these responsibilities into layers. The seek lab asks you to extend the interface programs use to access file data, while preserving the existing behavior of the underlying file system.</p>
+<div style="border-left: 6px solid #f0ad4e; background: #fff8e8; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Big Idea</h3>
+    <p>The xv6++ file system builds high-level abstractions such as files, directories, links, and file descriptors on top of disk blocks while using locks and write-ahead logging to preserve consistency.</p>
+    <p>A file's contents and size are persistent state. An open-file object's current offset is in-memory state. Seeking changes that offset without changing the file's contents or size.</p>
+</div>
+
+<hr />
+<h2>What You Will Learn</h2>
+
+<p>Major topics in this module include:</p>
+
+<ul>
+    <li>the layered organization of the xv6++ file system,</li>
+    <li>disk blocks and the on-disk file-system layout,</li>
+    <li>the purpose of the superblock,</li>
+    <li>block allocation and free-space tracking,</li>
+    <li>the buffer cache,</li>
+    <li>buffer locking and reference management,</li>
+    <li>the disk driver interface,</li>
+    <li>write-ahead logging,</li>
+    <li>transactions, commits, installation, and recovery,</li>
+    <li>on-disk and in-memory inodes,</li>
+    <li>direct and indirect block addressing,</li>
+    <li>reading and writing inode data,</li>
+    <li>directory entries and path-name lookup,</li>
+    <li>file descriptors and open-file objects,</li>
+    <li>hard links and unlinking,</li>
+    <li>the distinction between hard links and symbolic links,</li>
+    <li>shared file offsets and absolute or relative file positioning,</li>
+    <li>safe offset arithmetic, bounds checking, and error handling.</li>
+</ul>
+
+<hr />
+<h2>Reading Assignment</h2>
+
+<p><strong>Read:</strong> xv6++ textbook Chapter 10, <strong>File System</strong>.</p>
+<p>As you read, focus on the following layers and responsibilities:</p>
+
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Layer or Topic</th>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">What to Focus On</th>
+    </tr></thead>
+    <tbody>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Disk layer</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How blocks are transferred between memory and persistent storage.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Buffer cache</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How disk blocks are cached, shared, locked, and reused.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Logging</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How write-ahead logging makes multi-block updates recoverable after a crash.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Block allocation</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How the bitmap identifies free and allocated disk blocks.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Inodes</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How file metadata and block addresses are represented on disk and in memory.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Directories</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How names are associated with inode numbers.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Path-name lookup</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How absolute and relative paths are resolved one component at a time.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>File descriptors</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">How per-process descriptors refer to shared open-file objects and inodes.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>File offsets</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Where the current offset is stored, how reads and writes advance it, and how duplicated descriptors share it.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Links</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The distinction between directory entries, hard links, and symbolic links.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>The quiz covers the chapter broadly. The seek lab concentrates on descriptors, open-file objects, inode size, locking, and system-call validation. Symbolic-link implementation is not required for this lab.</p>
+
+<hr />
+<h2>Lecture Materials</h2>
+
+<p>This module includes the following lecture material:</p>
+<ul><li><strong>Lecture Deck:</strong> Chapter 10 &mdash; File System</li></ul>
+<p>Use the slides to review the overall architecture, but study the textbook and source code before completing the quiz and lab.</p>
+
+<hr />
+<h2>Assessments in This Module</h2>
+
+<h3>Assessment 1: Chapter 10 Quiz &mdash; File System</h3>
+
+<table style="border-collapse: collapse; width: 100%;">
+    <tbody>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Format</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Canvas quiz</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Questions</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">15 questions selected from the Chapter 10 question bank</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Points</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">15 points</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Attempts</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Up to three attempts</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Correct answers</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Correct answers will not be shown.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Topics</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Buffer cache, logging, block allocation, inodes, directories, path lookup, file descriptors, links, and crash recovery.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Assessment 2: Seek Lab</h3>
+<p>In this lab, you will implement <code>seek(fd, offset, whence)</code> so that a process can reposition an open file before its next read or write.</p>
+<p>The starter already provides the seek constants, user-level and system-call plumbing, and the test program. The kernel handler <code>sys_seek()</code> is a stub that returns <code>-1</code>. You will complete that handler and add the file-level operation.</p>
+
+<table style="border-collapse: collapse; width: 100%;">
+    <tbody>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Repository</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>/home/student/GitHub/xv6pp-riscv-labs-private</code></td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Repository branch</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>seek</code></td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Points</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">50 points</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Main task</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Implement safe file positioning without changing file data or file size.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>System call</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>int seek(int fd, int offset, int whence);</code></td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Positioning modes</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>SEEK_SET</code>: relative to byte zero; <code>SEEK_CUR</code>: relative to the current offset; <code>SEEK_END</code>: relative to file size.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Valid positions</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Byte zero through the current file size, inclusive. Seeking beyond EOF is rejected in this lab.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Return values</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>0</code> on success; <code>-1</code> on failure. A failed seek preserves the current offset.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Supported objects</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Inode-backed open-file objects (<code>FD_INODE</code>). Reject pipes and devices.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Implementation files</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/sysfile.cpp</code>, <code>kernel/file.h</code>, and <code>kernel/file.cpp</code>.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Synchronization</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Use <code>inode_lock_guard</code> while examining file size and calculating, validating, and updating the offset.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Arithmetic</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Use a wide signed temporary such as <code>long long tmp</code>; cast the base position before adding the signed displacement.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Tests and grading</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>seektest</code>: 25 points; <code>usertests -q</code>: 25 points. Run <code>make grade</code> or <code>./grade-lab-seek</code>.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Submission</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Commit and push the solution, run <code>make zipball</code>, and upload <code>lab.zip</code> to Canvas. Follow the Seek Lab assignment for complete instructions.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div style="border-left: 6px solid #d9534f; background: #fff0f0; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Important Lab Requirements</h3>
+    <p>Work on the <strong>seek</strong> branch. Preserve existing file-system behavior and the provided test assertions.</p>
+    <p>Calculate and validate the new position before changing the offset. Invalid descriptors, unsupported file types, invalid modes, and out-of-range positions must fail safely.</p>
+    <p>The grader expects the exact success lines <code>seek test: ok</code> and <code>ALL TESTS PASSED</code>. The provided tests print these lines when their checks succeed.</p>
+</div>
+
+<hr />
+<h2>Learning Objectives</h2>
+
+<p>By the end of this module, you should be able to:</p>
+
+<ol>
+    <li>Describe the layered organization of the xv6++ file system.</li>
+    <li>Explain the purpose of the disk-block abstraction.</li>
+    <li>Describe the role of the buffer cache.</li>
+    <li>Explain why only one cached buffer should represent a disk block.</li>
+    <li>Explain how buffer locks protect shared block contents.</li>
+    <li>Describe the purpose of write-ahead logging.</li>
+    <li>Explain the stages of a logged transaction.</li>
+    <li>Describe how log recovery restores a consistent file system after a crash.</li>
+    <li>Explain how free disk blocks are tracked.</li>
+    <li>Describe the information stored in an inode.</li>
+    <li>Distinguish between an on-disk inode and an in-memory inode.</li>
+    <li>Explain direct and indirect block addressing.</li>
+    <li>Describe how a file-relative block number is translated into a disk block.</li>
+    <li>Explain how directories map names to inode numbers.</li>
+    <li>Trace an absolute or relative path through path-name lookup.</li>
+    <li>Distinguish among a file descriptor, an open-file object, and an inode.</li>
+    <li>Explain how duplicated descriptors and descriptors inherited through <code>fork()</code> share a file offset.</li>
+    <li>Explain the purpose of an inode link count.</li>
+    <li>Distinguish between a hard link and a symbolic link.</li>
+    <li>Explain how reads and writes use and advance an open-file offset.</li>
+    <li>Calculate requested positions for <code>SEEK_SET</code>, <code>SEEK_CUR</code>, and <code>SEEK_END</code>.</li>
+    <li>Use wide signed arithmetic to avoid unsigned wraparound and signed overflow.</li>
+    <li>Validate a seek while preserving the old offset on failure.</li>
+    <li>Explain why seeking needs synchronization but does not modify persistent file data.</li>
+    <li>Test exact EOF, negative displacements, invalid requests, and existing file-system behavior.</li>
+</ol>
+
+<hr />
+<h2>Key Vocabulary</h2>
+
+<table style="border-collapse: collapse; width: 100%;">
+    <tbody>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Block</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A fixed-size unit transferred between memory and disk.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Superblock</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">On-disk metadata describing the layout and size of the file system.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Buffer cache</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">An in-memory cache of disk blocks that also synchronizes access to them.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Write-ahead log</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A reserved disk area in which an update is recorded before being installed in its normal location.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Transaction</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A group of related file-system updates that should be committed atomically.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Commit</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The point at which a logged transaction is recorded as complete and recoverable.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Recovery</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Replaying a committed transaction after a crash.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Bitmap</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A structure that records which disk blocks are free or allocated.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Inode</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A file-system object containing a file's type, size, link count, and block addresses.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Direct block</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A data block whose address is stored directly in the inode.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Indirect block</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A block containing additional data-block addresses.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Directory entry</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A mapping from a name to an inode number.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Path-name lookup</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Resolving a path one directory component at a time.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>File descriptor</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A small per-process integer referring to an open-file object.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Open-file object</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A kernel object containing the file type, access modes, current offset, and inode or pipe reference.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>File offset</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The byte position at which the next read or write begins; stored in the open-file object.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Seek</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">An operation that changes the current file offset without reading or writing file data.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Whence</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The argument selecting the reference position from which a seek displacement is measured.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>EOF</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">End of file. For a file of size N bytes, offset N is immediately after the final byte.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Signed displacement</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A positive, zero, or negative byte distance from a reference position.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Hard link</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">An additional directory entry referring directly to the same inode.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Symbolic link</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A special file containing a pathname to another file or directory.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Dangling symbolic link</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A symbolic link whose stored target path cannot be resolved.</td>
+        </tr>
+    </tbody>
+</table>
+
+<hr />
+<h2>Files and Code to Notice</h2>
+
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">File or Concept</th>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Why It Matters</th>
+    </tr></thead>
+    <tbody>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/buffer_cache.cpp</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Caches disk blocks and provides synchronized block access.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Buffer-cache read, write, and release operations</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Obtain locked buffers, transfer block contents, and release buffers after use.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/file_system_log.cpp</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Groups file-system changes into recoverable transactions.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>begin_op</code>, <code>end_op</code>, and <code>log_op_guard</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Bracket operations that participate in file-system transactions.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>log_write</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Records that a modified block belongs to the current transaction.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/file_system.cpp</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Manages inode allocation, locking, block mapping, reading, writing, and path lookup.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>bmap</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Maps a file-relative block number to a disk block.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>readi</code> and <code>writei</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Read and write data associated with an inode.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>dirlookup</code> and <code>dirlink</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Find or add name-to-inode mappings in a directory.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>namei</code> and <code>nameiparent</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Resolve complete paths or locate a path's parent directory.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/file.h</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Defines the open-file object, including its private <code>off</code> field. Add the public seek member declaration here.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/file.cpp</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Contains read and write behavior. Study how these methods protect and advance the offset, then add the seek operation.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/sysfile.cpp</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Contains file-system syscall handlers and the <code>sys_seek()</code> stub. Use <code>argint()</code> and <code>argfd()</code> to obtain arguments and validate descriptors.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/inode_lock_guard.h</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Provides scope-based inode locking and automatic unlocking on return.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>kernel/fcntl.h</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Provides the seek constants used by the kernel and user test.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>user/seektest.c</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Exercises the three seek modes, overwrite behavior, and selected failure cases.</td>
+        </tr>
+    </tbody>
+</table>
+
+<hr />
+<h2>Understanding File Positioning</h2>
+
+<p>Suppose a file contains <code>ABCDEFGHIJKLMNOP</code>, with a size of 16 bytes. Its first byte is at offset 0, its last byte is at offset 15, and EOF is at offset 16.</p>
+<p>The following operations happen in sequence:</p>
+
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Operation</th>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Offset Afterward</th>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Meaning</th>
+    </tr></thead>
+    <tbody>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>seek(fd, 4, SEEK_SET)</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">4</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The next read starts at <code>E</code>.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Read one byte</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">5</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Returns <code>E</code> and advances the offset.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>seek(fd, 2, SEEK_CUR)</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">7</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Moves two bytes forward from the current offset of 5.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Read one byte</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">8</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Returns <code>H</code> and advances the offset.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>seek(fd, -2, SEEK_END)</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">14</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Moves to two bytes before EOF.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Read one byte</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">15</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Returns <code>O</code> and advances the offset.</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><code>seek(fd, -17, SEEK_END)</code></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">15 (unchanged)</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The requested position is -1, so the call fails.</td>
+        </tr>
+    </tbody>
+</table>
+
+<div style="border-left: 6px solid #f0ad4e; background: #fff8e8; padding: 14px; margin: 16px 0;">
+    <h3 style="margin-top: 0;">Arithmetic Hint</h3>
+    <p>The inode size and stored offset are unsigned, but the displacement is signed. Convert the base before adding:</p>
+    <pre><code>long long tmp = (long long) ip-&gt;size + offset;
+</code></pre>
+    <p>For <code>SEEK_CUR</code>, use the current <code>off</code> as the base. Check that the resulting position is between zero and file size before storing it.</p>
+    <p>A cast around the completed sum is too late: <code>(long long) (ip-&gt;size + offset)</code> still performs the original unsigned addition first. The Seek Lab instructions include a full worked arithmetic example.</p>
+</div>
+
+<hr />
+<h2>Hard Links and Symbolic Links: Chapter Background</h2>
+
+<p>Links remain part of the chapter reading and quiz. You do not implement symbolic links in the seek lab.</p>
+
+<table style="border-collapse: collapse; width: 100%;">
+    <thead><tr>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Feature</th>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Hard Link</th>
+        <th style="padding: 8px; border: 1px solid #cccccc; text-align: left;">Symbolic Link</th>
+    </tr></thead>
+    <tbody>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>What it stores</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A directory entry referring directly to an inode number</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">A pathname stored as file data</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Target requirement</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The target inode must exist when the link is created</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The target may be missing when the link is created</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Effect of target removal</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The inode remains while another hard link or open reference exists</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The symbolic link may become dangling</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Resolution</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The directory entry identifies the inode directly</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">The stored path must be resolved when the link is followed</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; border: 1px solid #cccccc;"><strong>Possible cycle</strong></td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Not through ordinary file hard links</td>
+            <td style="padding: 8px; border: 1px solid #cccccc;">Yes, symbolic links can refer to one another cyclically</td>
+        </tr>
+    </tbody>
+</table>
+
+<hr />
+<h2>Recommended Work Plan</h2>
+
+<ol>
+    <li>Read Chapter 10 and review the file-system layer diagram.</li>
+    <li>Review the lecture slides.</li>
+    <li>Trace a disk block through the buffer-cache interface.</li>
+    <li>Study the write-ahead logging commit and recovery sequence.</li>
+    <li>Review the on-disk inode structure and block mapping.</li>
+    <li>Trace how a pathname is resolved through directories.</li>
+    <li>Review the relationship among file descriptors, open-file objects, and inodes.</li>
+    <li>Complete the Chapter 10 quiz.</li>
+    <li>Read the Seek Lab instructions completely before editing code.</li>
+    <li>Switch to the <code>seek</code> branch in your private lab repository.</li>
+    <li>Build and run the starter. The provided seek test is expected to fail while <code>sys_seek()</code> returns <code>-1</code>.</li>
+    <li>Read <code>user/seektest.c</code> and trace the expected offset after each operation.</li>
+    <li>Study <code>file::read()</code>, <code>file::write()</code>, <code>argfd()</code>, and <code>inode_lock_guard</code>.</li>
+    <li>Complete <code>sys_seek()</code> and add the file-level declaration and implementation.</li>
+    <li>Use wide signed arithmetic, validate both bounds, and preserve the old offset on failure.</li>
+    <li>Run <code>seektest</code>, check additional boundary cases, and run <code>usertests -q</code>.</li>
+    <li>Run <code>make grade</code> or <code>./grade-lab-seek</code> and inspect all failures.</li>
+    <li>Commit and push your solution, run <code>make zipball</code>, and submit <code>lab.zip</code> to Canvas.</li>
+</ol>
+
+<hr />
+<h2>Common Trouble Spots</h2>
+
+<ul>
+    <li>Thinking that the buffer cache is only a performance optimization. It also synchronizes access to disk blocks.</li>
+    <li>Confusing a disk block with a memory page.</li>
+    <li>Thinking that a committed transaction has already been installed in every home location.</li>
+    <li>Forgetting that recovery replays only a committed log transaction.</li>
+    <li>Confusing an inode with a file name. Names are stored in directories, not in the target inode.</li>
+    <li>Confusing an on-disk inode with its in-memory cached representation.</li>
+    <li>Confusing a process file descriptor with the shared open-file object it references.</li>
+    <li>Forgetting that duplicated descriptors may share the same file offset.</li>
+    <li>Assuming that unlink always destroys the inode immediately.</li>
+    <li>Confusing a hard link with a symbolic link.</li>
+    <li>Confusing the current offset with the file size. <code>SEEK_CUR</code> and <code>SEEK_END</code> use different reference positions.</li>
+    <li>Forgetting that a successful read or write advances the current offset.</li>
+    <li>Adding a negative displacement to an unsigned base before converting to a wider signed type.</li>
+    <li>Negating the most negative signed integer to check a bound; this can overflow.</li>
+    <li>Updating the offset before checking whether the request is valid.</li>
+    <li>Rejecting exact EOF, or allowing positions beyond EOF despite this lab's bounds.</li>
+    <li>Returning the new position instead of the required success value <code>0</code>.</li>
+    <li>Using an inode pointer before rejecting pipes and devices.</li>
+    <li>Skipping the inode lock because seeking does not write disk data. Shared in-memory state still needs synchronization.</li>
+    <li>Adding a log transaction to seek even though it only updates the open-file offset. Transactions remain necessary for operations that modify persistent file-system state.</li>
+    <li>Leaving an inode or buffer locked on an error path. Use the existing RAII guards correctly.</li>
+</ul>
+
+<hr />
+<div style="border-left: 6px solid #5cb85c; background: #f0fff0; padding: 14px; margin: 16px 0;">
+    <h2 style="margin-top: 0;">Final Reminder</h2>
+    <p>Keep the file-system layers in mind. An inode-backed read follows a path such as:</p>
+    <pre><code>read system call
+    -&gt; file descriptor
+    -&gt; open-file object and current offset
+    -&gt; inode and file-relative block mapping
+    -&gt; buffer cache
+    -&gt; disk driver when disk I/O is needed
+</code></pre>
+    <p>Operations that modify persistent file-system state also use the logging layer to make their updates recoverable. Not every file operation performs disk I/O or starts a transaction.</p>
+    <p>The seek lab focuses on this shorter path:</p>
+    <pre><code>seek system call
+    -&gt; validate descriptor and file type
+    -&gt; lock inode
+    -&gt; calculate and validate requested position
+    -&gt; update the open-file offset
+    -&gt; unlock and return
+</code></pre>
+    <p>Seeking does not modify the file's data or size and needs no log transaction. The inode lock protects the position calculation and update; acquiring that lock may load inode metadata if it is not already cached.</p>
+    <p>Complete the reading and quiz before beginning the lab. Understanding open-file objects, inode size, shared offsets, and locking will make the implementation substantially easier.</p>
+</div>
