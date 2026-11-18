@@ -56,7 +56,7 @@ void buffer_cache::relse(buf *b) {
   if (b->refcnt == 0) {
     // Move to front of LRU list
     cache.remove(b);
-    cache.push_back(b);
+    cache.push_front(b);
   }
 }
 
